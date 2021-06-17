@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-import os
 import cv2
-import csv
 import json
+import random
 import numpy as np
 from PIL import Image
 from pathlib import Path
@@ -10,57 +9,46 @@ from datetime import datetime
 from django.views import View
 from django.http import JsonResponse, HttpResponse, QueryDict
 from django.core.files.storage import FileSystemStorage
-from tensorflow.keras.models import load_model
 
-from server import settings
 from .models import KakaoPlace, TourPlace, Review, UserLikeTourPlace, UserLikeKakaoPlace
 from user.utils import login_decorator
 from tensorflow.keras.models import load_model
 
 
-with open("place/place_23_index_to_label.json", "r", encoding="utf-8-sig") as f:
+with open("place/model/place_55_label.json", "r", encoding="utf-8-sig") as f:
     label_info = json.load(f)
-    # label_info = {v: k for k, v in label_info.items()}
-    print(label_info)
 
-model = load_model("place/model/place23_efnb0_3-0.26-0.92.h5")
+model = load_model("place/model/efnb0_8-0.46-0.90.h5")
 
 
 # image upload & classification
 class Classification(View):
-    def inference(image_path):
-        test = cv2.imread(image_path)
+    def inference(self, image_path):
+        test = cv2.imdecode(np.fromstring(image_path.read(), np.uint8), cv2.IMREAD_UNCHANGED)
         test = cv2.cvtColor(test, cv2.COLOR_BGR2RGB)
         test = cv2.resize(test, (224, 224))
         test = test[np.newaxis, :, :, :]
         pred = model.predict(test, batch_size=1)
         return np.argmax(pred)
 
-    def get(self, img):
-        pass
-
     def post(self, request):
         """
-        파일명 수정 > time, idx
-        기능 추가 - 내가 검색했던 내용 볼 수 있게끔? > 예측결과도 저장????
-        predict 참고 : https://github.com/Development-On-Saturday/AIFOODIE_PROJECT/blob/main/django_dev/foods/views.py
+        기능 추가 - 내가 검색했던 내용 볼 수 있게끔? > 예측결과도 저장
         """
         img = request.FILES['image']
 
         # 이미지 저장
-        fs = FileSystemStorage()  # 이미지 파일을 저장할때 쓰는 함수
-        now = datetime.now()
-        img_name = f"{now.strftime('%Y%m%d%H%M%S')}.jpeg"
-        filename = fs.save(img_name, img)
-        uploaded_file_url = fs.path(filename)
+        # fs = FileSystemStorage()  # 이미지 파일을 저장할때 쓰는 함수
+        # now = datetime.now()
+        # img_name = f"{now.strftime('%Y%m%d%H%M%S')}.jpeg"
+        # filename = fs.save(img_name, img)
+        # uploaded_file_url = fs.path(filename)
 
         # 이미지 전처리 및 예측
-        pred_index = self.inference(uploaded_file_url)
+        pred_index = str(self.inference(img))
         pred = label_info[pred_index]
-        print('예측 결과는 >>> ', pred_index, pred)
-
-        # sentence 선택
-        return JsonResponse({'name': pred, 'sentence': f'근사한 {pred}이네요!'}, status=200)
+        sen = random.choice(pred['sentence'])
+        return JsonResponse({'name': pred['category'], 'sentence': sen}, status=200)
 
 
 class PlaceReviewView(View):
@@ -108,17 +96,30 @@ class UserReviewView(View):
 
         reviews = Review.objects.select_related('place_tour', 'place_kakao').filter(user_id=request.user).order_by('-updated_at')[offset*limit:(offset+1)*limit]
 
-        result = [{
-            'review_id': review.id,
-            'type': review.place_type,
-            'place_id': review.place_tour.id if review.place_type == 'tour' else review.place_kakao.id,
-            'grade': review.grade,
-            'text': review.text,
-            'date': review.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-            'place_title': review.place_tour.title if review.place_type == 'tour' else review.place_kakao.title,
-            'address': review.place_tour.address if review.place_type == 'tour' else review.place_kakao.address,
-            'image': review.place_tour.image1 if review.place_type == 'tour' and review.place_tour.image1 is not None else ""
-        } for review in reviews]
+        result = []
+        for review in reviews:
+            data = {
+                'review_id': review.id,
+                'type': review.place_type,
+                'place_id': review.place_tour.id if review.place_type == 'tour' else review.place_kakao.id,
+                'grade': review.grade,
+                'text': review.text,
+                'date': review.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+                'place_title': review.place_tour.title if review.place_type == 'tour' else review.place_kakao.title,
+                'address': review.place_tour.address if review.place_type == 'tour' else review.place_kakao.address,
+                'image': review.place_tour.image1 if review.place_type == 'tour' and review.place_tour.image1 is not None else "",
+                'mapx': review.place_tour.mapx if review.place_type == 'tour' else review.place_kakao.mapx,
+                'mapy': review.place_tour.mapy if review.place_type == 'tour' else review.place_kakao.mapy,
+            }
+            if review.place_type == 'kakao':
+                data['place_url'] = review.place_kakao.place_url
+                data['category_name'] = review.place_kakao.category_name
+                data['category_group_code'] = review.place_kakao.category_group_code
+                data['category_group_name'] = review.place_kakao.category_group_name
+                data['phone'] = review.place_kakao.tel
+                data['road_address_name'] = review.place_kakao.road_address
+            result.append(data)
+
         return JsonResponse({'reviews': result}, status=200)
 
     @login_decorator
@@ -312,7 +313,9 @@ class UserLikeView(View):
                 'title': place.place.title,
                 'image': place.place.image1,
                 'address': place.place.address,
-                'created_at': place.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                'created_at': place.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                'mapx': place.place.mapx,
+                'mapy': place.place.mapy
             }
             response['all'].append(data)
             response['a'+str(place.place.content_type_id)].append(data)
