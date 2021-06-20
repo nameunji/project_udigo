@@ -18,7 +18,7 @@ from tensorflow.keras.models import load_model
 with open("place/model/place_55_label.json", "r", encoding="utf-8-sig") as f:
     label_info = json.load(f)
 
-model = load_model("place/model/efnb0_8-0.46-0.90.h5")
+model = load_model("place/model/efn_b0_224_na_5-0.43-0.90.h5")
 
 
 # image upload & classification
@@ -210,6 +210,17 @@ class UserReviewView(View):
 
             review.save()
             return HttpResponse(status=200)
+        except Review.DoesNotExist:
+            return JsonResponse({'message': 'INVALID_REVIEW'}, status=400)
+
+    @login_decorator
+    def delete(self, request):
+        try:
+            user = request.user
+            review_id = QueryDict(request.body)['review_id']
+            review = Review.objects.get(id=review_id, user=user)
+            review.delete()
+            return HttpResponse(status=204)
         except Review.DoesNotExist:
             return JsonResponse({'message': 'INVALID_REVIEW'}, status=400)
 
